@@ -1,3 +1,4 @@
+import { HowToPlayHeaderButton } from "@/components/HowToPlayModal";
 import Trainer from "@/components/Trainer";
 
 export default function Home() {
@@ -31,9 +32,12 @@ export default function Home() {
             </p>
           </div>
         </div>
-        <span className="rounded-full border border-[#ee66b7]/40 bg-[#df3ca9]/15 px-3 py-1 text-xs font-semibold text-[#ff9ce0]">
-          Hybrid Engine + Code + LLM
-        </span>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <HowToPlayHeaderButton />
+          <span className="rounded-full border border-[#ee66b7]/40 bg-[#df3ca9]/15 px-3 py-1 text-xs font-semibold text-[#ff9ce0]">
+            Hybrid Engine + Code + LLM
+          </span>
+        </div>
       </header>
       <Trainer />
     </main>

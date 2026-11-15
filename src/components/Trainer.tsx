@@ -9,6 +9,10 @@ import Board from "./Board";
 import CoachCard, { type CoachReport } from "./CoachCard";
 import EvalBar from "./EvalBar";
 import { ShareFriendModal, ViewFriendModal } from "./FriendModals";
+import HowToPlayModal, {
+  OPEN_GUIDE_EVENT,
+  hasSeenTutorial,
+} from "./HowToPlayModal";
 import { ResumeSessionModal, SaveSessionModal } from "./SessionModals";
 import { type MoveQuality, QUALITY_GLYPH, classifyMove } from "@/lib/classify";
 import { type CoachPayload, formatMoveNotation } from "@/lib/coach";
@@ -179,7 +183,7 @@ export default function Trainer() {
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [pendingPromo, setPendingPromo] = useState<{ from: Square; to: Square } | null>(null);
   const [activeModal, setActiveModal] = useState<
-    "save" | "resume" | "share_friend" | "view_friend" | null
+    "save" | "resume" | "share_friend" | "view_friend" | "guide" | null
   >(null);
   const [initialFriendPassport, setInitialFriendPassport] =
     useState<FriendPassportPayload | null>(null);
@@ -291,8 +295,14 @@ export default function Trainer() {
         );
       } else {
         setPlayerRating(loadPlayerRatingState());
+        if (!hasSeenTutorial()) {
+          setActiveModal("guide");
+        }
       }
     });
+
+    const onOpenGuide = () => setActiveModal("guide");
+    window.addEventListener(OPEN_GUIDE_EVENT, onOpenGuide);
     const analysis = new StockfishEngine();
     const opponent = new StockfishEngine();
     analysisRef.current = analysis;
@@ -309,6 +319,7 @@ export default function Trainer() {
     );
     return () => {
       cancelled = true;
+      window.removeEventListener(OPEN_GUIDE_EVENT, onOpenGuide);
       analysis.terminate();
       opponent.terminate();
       analysisRef.current = null;
@@ -1096,6 +1107,14 @@ export default function Trainer() {
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               <button
                 type="button"
+                onClick={() => setActiveModal("guide")}
+                className="flex items-center gap-1 rounded-lg border border-white/15 bg-[#352f49] px-2.5 py-1 text-xs font-bold text-neutral-100 transition hover:bg-[#433b5c]"
+                title="Open interactive How to Play & Feature Guide"
+              >
+                <span>❓ How to Play</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveModal("share_friend")}
                 className="flex items-center gap-1 rounded-lg border border-[#ee66b7]/35 bg-[#2a213d] px-2.5 py-1 text-xs font-bold text-[#ff9ce0] transition hover:bg-[#3a2d54]"
                 title="Share a read-only Friend Passport showing your Glicko-2 rating and last 3 games"
@@ -1221,6 +1240,10 @@ export default function Trainer() {
             setActiveModal(null);
           }}
         />
+      )}
+
+      {activeModal === "guide" && (
+        <HowToPlayModal onClose={() => setActiveModal(null)} />
       )}
     </div>
   );
