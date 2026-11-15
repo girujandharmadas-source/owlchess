@@ -33,6 +33,8 @@ export interface SessionPlayerProfile {
     diff: number;
     opponentElo: number;
     result: GameOutcomeLabel;
+    moves?: string[];
+    pgn?: string;
   }>;
 }
 
@@ -179,6 +181,10 @@ export function importSessionFromHash(hashOrUrl: string): SessionPayload | null 
         diff: Math.round(item.diff),
         opponentElo: Math.round(item.opponentElo),
         result: item.result,
+        ...(Array.isArray(item.moves) && item.moves.every((m) => typeof m === "string")
+          ? { moves: [...item.moves] }
+          : {}),
+        ...(typeof item.pgn === "string" ? { pgn: item.pgn } : {}),
       });
     }
 
@@ -218,6 +224,8 @@ export function profileToRatingState(profile: SessionPlayerProfile): PlayerRatin
       diff: h.diff,
       opponentElo: h.opponentElo,
       result: h.result,
+      ...(h.moves ? { moves: [...h.moves] } : {}),
+      ...(h.pgn ? { pgn: h.pgn } : {}),
     })),
   };
 }

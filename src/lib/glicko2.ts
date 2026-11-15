@@ -29,6 +29,13 @@ export interface RatingHistoryEntry {
   diff: number;
   opponentElo: number;
   result: GameOutcomeLabel;
+  moves?: string[];
+  pgn?: string;
+}
+
+export interface GameHistoryMeta {
+  moves?: string[];
+  pgn?: string;
 }
 
 export interface PlayerRatingState {
@@ -132,6 +139,7 @@ export function updateRating(
   opponentElo: number,
   result: GameResultScore,
   nowIso: string = new Date().toISOString(),
+  meta?: GameHistoryMeta,
 ): RatingUpdateOutcome {
   const prevRating = Number.isFinite(playerState.rating) ? playerState.rating : DEFAULT_RATING;
   const prevRd = Number.isFinite(playerState.rd)
@@ -180,6 +188,8 @@ export function updateRating(
     diff,
     opponentElo: Math.round(opponentElo),
     result: resultLabel,
+    ...(meta?.moves ? { moves: [...meta.moves] } : {}),
+    ...(meta?.pgn ? { pgn: meta.pgn } : {}),
   };
 
   return {
@@ -200,12 +210,14 @@ export function updatePlayerRating(
   opponentElo: number,
   gameResult: GameResultScore,
   nowIso: string = new Date().toISOString(),
+  meta?: GameHistoryMeta,
 ): PlayerRatingState {
   const { rating, rd, vol, gamesPlayed, history } = updateRating(
     playerState,
     opponentElo,
     gameResult,
     nowIso,
+    meta,
   );
   return { rating, rd, vol, gamesPlayed, history };
 }

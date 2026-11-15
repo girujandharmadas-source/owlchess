@@ -39,6 +39,9 @@
    - **Save Game Modal**: Compresses your full session (`currentGame` FEN, UCI move list, opponent Elo, orientation, and `playerProfile` Glicko-2 rating + history) into a URL-safe `lz-string` hash (`/#save=...`) and renders a live scannable QR code (`qrcode.react`).
    - **Download QR Code**: Exports the QR canvas as a PNG dynamically named with today's date (`owlchess-save-YYYY-MM-DD.png`) or copies the Magic Link URL with one click.
    - **Resume Game Modal & Auto-Hydration**: Drag-and-drop or browse for any saved QR image (decoded client-side via `jsqr`), paste a Magic Link, or open a `/#save=...` URL directly in any browser to instantly restore your board, move list, and Glicko-2 rating (while automatically cleaning the URL bar via `history.replaceState`).
+8. **Share with Friend & Read-Only Spectator Replay (`src/lib/friend.ts`, `src/components/FriendModals.tsx`)**
+   - **Share with Friend Modal**: Generates a public, read-only **Friend Passport** (`/#friend=...` Magic Link + `owlchess-friend-YYYY-MM-DD.png` QR Code) packing only your Glicko-2 rating, RD, skill tier, W/L/D record, and up to your **last 3 games**.
+   - **View Friend's Games Spectator Window**: Friends can open a `/#friend=...` link directly (or drop a Friend QR image / paste the link in the **View Friend's Games** modal) to inspect your rating card, switch between your past 3 games, and step through every move (`<<`, `<`, `>`, `>>`) on a read-only `chessground` mini replay board without modifying or overwriting their own `localStorage` rating or active game.
 
 ---
 
@@ -77,8 +80,8 @@ User / Stockfish 19 Plays Move
 | **Master Games API** | Lichess Opening Explorer (`explorer.lichess.ovh/masters`) + curated ECO book |
 | **AI Coach** | `gemini-3.5-flash-lite` (SSE streaming) + deterministic grounded fallback |
 | **Player Rating System** | Official Glicko-2 (`r`, `RD`, `σ` via Illinois solver) persisted in `localStorage` (`owlchess_glicko2`) |
-| **Session Save & Handoff** | `lz-string` Magic Link URL hash (`/#save=...`) + `qrcode.react` PNG export + `jsqr` QR image decoder |
-| **Testing** | Vitest (`55` unit & real Stockfish WASM integration tests) |
+| **Session Save & Handoff** | `lz-string` Magic Link URL hash (`/#save=...` & `/#friend=...`) + `qrcode.react` PNG export + `jsqr` QR image decoder |
+| **Testing** | Vitest (`60` unit & real Stockfish WASM integration tests) |
 
 ---
 
@@ -117,7 +120,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🧪 Running the Test Suite
 
-Run all 55 unit and integration tests via Vitest:
+Run all 60 unit and integration tests via Vitest:
 
 ```bash
 npm test
@@ -127,6 +130,7 @@ npm test
 - `src/lib/lowElo.test.ts` (6 tests): Skill tier mapping (`Beginner` through `Master / Grandmaster`), depth-limited `MultiPV=4` search configs, temperature probability curves across candidates 1–4, and `>600 cp` Queen-blunder / mate-in-1 safety filtering.
 - `src/lib/glicko2.test.ts` (7 tests): Official Glicko-2 rating updates on win/draw/loss, opponent Elo expectation scaling, multi-game RD narrowing, and `localStorage` (`owlchess_glicko2`) persistence & reset.
 - `src/lib/session.test.ts` (5 tests): `lz-string` Magic Link hash compression/decompression (`exportSessionToHash` / `importSessionFromHash`), full URL parsing, illegal move validation, and `owlchess-save-YYYY-MM-DD.png` filename formatting.
+- `src/lib/friend.test.ts` (5 tests): `FriendPassportPayload` packing (`exportFriendPassport` / `importFriendPassport`), max-3-games cap, payload hygiene, `#save=` isolation, and `owlchess-friend-YYYY-MM-DD.png` filename formatting.
 - `src/lib/classify.test.ts` (6 tests): Move quality classification (`best`, `good`, `inaccuracy`, `mistake`, `blunder`).
 - `src/lib/motifs.test.ts` (7 tests): Deterministic detection of forks, absolute pins, skewers, discovered checks, zwischenzugs, hanging pieces, and center control.
 - `src/lib/openings.test.ts` (3 tests): FEN key normalization, curated opening book matching, and Lichess Masters payload parsing.

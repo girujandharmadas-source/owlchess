@@ -8,10 +8,12 @@ import type { Key } from "chessground/types";
 import Board from "./Board";
 import CoachCard, { type CoachReport } from "./CoachCard";
 import EvalBar from "./EvalBar";
+import { ShareFriendModal, ViewFriendModal } from "./FriendModals";
 import { ResumeSessionModal, SaveSessionModal } from "./SessionModals";
 import { type MoveQuality, QUALITY_GLYPH, classifyMove } from "@/lib/classify";
 import { type CoachPayload, formatMoveNotation } from "@/lib/coach";
 import { type AnalysisLine, StockfishEngine } from "@/lib/engine";
+import { type FriendPassportPayload, importFriendPassport } from "@/lib/friend";
 import {
   type GameOutcomeLabel,
   type GameResultScore,
@@ -176,7 +178,11 @@ export default function Trainer() {
   const [selectedPly, setSelectedPly] = useState<number | null>(null);
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [pendingPromo, setPendingPromo] = useState<{ from: Square; to: Square } | null>(null);
-  const [activeModal, setActiveModal] = useState<"save" | "resume" | null>(null);
+  const [activeModal, setActiveModal] = useState<
+    "save" | "resume" | "share_friend" | "view_friend" | null
+  >(null);
+  const [initialFriendPassport, setInitialFriendPassport] =
+    useState<FriendPassportPayload | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
   const game = useMemo(() => {
@@ -200,12 +206,14 @@ export default function Trainer() {
   const effectiveOpponentElo = fullStrength ? eloRange.max : displayedElo;
 
   const recordFinishedGame = useCallback(
-    (resultScore: GameResultScore, reason: string) => {
+    (resultScore: GameResultScore, reason: string, finalMoves: string[]) => {
       if (ratedGameIdRef.current === gameId) return;
       ratedGameIdRef.current = gameId;
 
       setPlayerRating((prev) => {
-        const next = updatePlayerRating(prev, effectiveOpponentElo, resultScore);
+        const next = updatePlayerRating(prev, effectiveOpponentElo, resultScore, undefined, {
+          moves: finalMoves,
+        });
         savePlayerRatingState(next);
         const latest = next.history.at(-1);
         setRatingBanner({
@@ -259,6 +267,20 @@ export default function Trainer() {
     Promise.resolve().then(() => {
       if (cancelled) return;
       const rawHash = typeof window !== "undefined" ? window.location.hash : "";
+      const friendPayload = rawHash ? importFriendPassport(rawHash) : null;
+      if (friendPayload) {
+        // Keep the viewer's own localStorage rating intact and open the spectator window
+        setPlayerRating(loadPlayerRatingState());
+        setInitialFriendPassport(friendPayload);
+        setActiveModal("view_friend");
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.search,
+        );
+        return;
+      }
+
       const hashPayload = rawHash ? importSessionFromHash(rawHash) : null;
       if (hashPayload) {
         applySessionPayload(hashPayload, "Session restored from Magic Link!");
@@ -494,7 +516,7 @@ export default function Trainer() {
         if (nextGame.isGameOver()) {
           const resultScore: GameResultScore = nextGame.isCheckmate() ? 0 : 0.5;
           const reason = gameOverText(nextGame, playerColor) ?? "Game over.";
-          recordFinishedGame(resultScore, reason);
+          recordFinishedGame(resultScore, reason, [...moves.slice(0, ply), chosenMove]);
         }
       } catch {
         // ignore invalid move check
@@ -515,17 +537,18 @@ export default function Trainer() {
         const m = nextGame.move({ from, to, promotion });
         moveStartTimestampRef.current[moves.length] = performance.now();
         setSelectedPly(null);
-        setMoves((ms) => [...ms, m.lan]);
+        const nextMoves = [...moves, m.lan];
+        setMoves(nextMoves);
         if (nextGame.isGameOver()) {
           const resultScore: GameResultScore = nextGame.isCheckmate() ? 1 : 0.5;
           const reason = gameOverText(nextGame, playerColor) ?? "Game over.";
-          recordFinishedGame(resultScore, reason);
+          recordFinishedGame(resultScore, reason, nextMoves);
         }
       } catch {
         setResync((n) => n + 1); // illegal: snap the board back
       }
     },
-    [fen, moves.length, playerColor, recordFinishedGame],
+    [fen, moves, playerColor, recordFinishedGame],
   );
 
   const onBoardMove = useCallback(
@@ -563,8 +586,8 @@ export default function Trainer() {
     opponentRef.current?.stop();
     setPendingPromo(null);
     setResigned(true);
-    recordFinishedGame(0, "You resigned. Stockfish wins.");
-  }, [history.length, overText, recordFinishedGame]);
+    recordFinishedGame(0, "You resigned. Stockfish wins.", moves);
+  }, [history.length, moves, overText, recordFinishedGame]);
 
   const handleResetRating = useCallback(() => {
     const reset = resetPlayerRatingState();
@@ -1040,31 +1063,55 @@ export default function Trainer() {
             </div>
           </div>
 
-          {/* Session Save & Resume Toolbar Row (Magic Link + QR Code) */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
-            <span className="text-[11px] font-medium text-neutral-400">
-              {sessionNotice ? (
-                <span className="font-semibold text-emerald-300">✓ {sessionNotice}</span>
-              ) : (
-                "Sync session across devices (Magic Link / QR)"
-              )}
-            </span>
-            <div className="flex items-center gap-2">
+          {/* Session Save & Resume + Friend Passport Toolbar */}
+          <div className="space-y-2 border-t border-white/10 pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-medium text-neutral-400">
+                {sessionNotice ? (
+                  <span className="font-semibold text-emerald-300">✓ {sessionNotice}</span>
+                ) : (
+                  "Session & Friend Passport (Magic Link / QR)"
+                )}
+              </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setActiveModal("save")}
+                  className="rounded-lg border border-[#ee66b7]/40 bg-[#df3ca9]/20 px-2.5 py-1 text-xs font-bold text-[#ff9ce0] transition hover:bg-[#df3ca9]/35"
+                  title="Generate Magic Link & downloadable QR Code for current game and Glicko-2 rating"
+                >
+                  Save Game
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveModal("resume")}
+                  className="rounded-lg border border-white/15 bg-[#352f49] px-2.5 py-1 text-xs font-bold text-neutral-100 transition hover:bg-[#433b5c]"
+                  title="Upload a saved QR Code image or paste a Magic Link to resume"
+                >
+                  Resume Game
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
               <button
                 type="button"
-                onClick={() => setActiveModal("save")}
-                className="rounded-lg border border-[#ee66b7]/40 bg-[#df3ca9]/20 px-3 py-1 text-xs font-bold text-[#ff9ce0] transition hover:bg-[#df3ca9]/35"
-                title="Generate Magic Link & downloadable QR Code for current game and Glicko-2 rating"
+                onClick={() => setActiveModal("share_friend")}
+                className="flex items-center gap-1 rounded-lg border border-[#ee66b7]/35 bg-[#2a213d] px-2.5 py-1 text-xs font-bold text-[#ff9ce0] transition hover:bg-[#3a2d54]"
+                title="Share a read-only Friend Passport showing your Glicko-2 rating and last 3 games"
               >
-                Save Game
+                <span>📤 Share with Friend</span>
               </button>
               <button
                 type="button"
-                onClick={() => setActiveModal("resume")}
-                className="rounded-lg border border-white/15 bg-[#352f49] px-3 py-1 text-xs font-bold text-neutral-100 transition hover:bg-[#433b5c]"
-                title="Upload a saved QR Code image or paste a Magic Link to resume"
+                onClick={() => {
+                  setInitialFriendPassport(null);
+                  setActiveModal("view_friend");
+                }}
+                className="flex items-center gap-1 rounded-lg border border-white/15 bg-[#352f49] px-2.5 py-1 text-xs font-bold text-neutral-100 transition hover:bg-[#433b5c]"
+                title="View a friend's rating and replay their past 3 games in read-only spectator mode"
               >
-                Resume Game
+                <span>👁 View Friend&apos;s Games</span>
               </button>
             </div>
           </div>
@@ -1154,6 +1201,25 @@ export default function Trainer() {
             applySessionPayload(payload, "Session restored from QR / Magic Link!")
           }
           onClose={() => setActiveModal(null)}
+        />
+      )}
+
+      {activeModal === "share_friend" && (
+        <ShareFriendModal
+          playerRating={playerRating}
+          activeMoves={moves}
+          activeOpponentElo={effectiveOpponentElo}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
+      {activeModal === "view_friend" && (
+        <ViewFriendModal
+          initialPassport={initialFriendPassport}
+          onClose={() => {
+            setInitialFriendPassport(null);
+            setActiveModal(null);
+          }}
         />
       )}
     </div>
