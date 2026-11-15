@@ -12,6 +12,17 @@ import { type MoveQuality, QUALITY_GLYPH, classifyMove } from "@/lib/classify";
 import { type CoachPayload, formatMoveNotation } from "@/lib/coach";
 import { type AnalysisLine, StockfishEngine } from "@/lib/engine";
 import {
+  type GameOutcomeLabel,
+  type GameResultScore,
+  type PlayerRatingState,
+  createInitialPlayerRatingState,
+  formatGlickoBadge,
+  loadPlayerRatingState,
+  resetPlayerRatingState,
+  savePlayerRatingState,
+  updatePlayerRating,
+} from "@/lib/glicko2";
+import {
   MIN_SLIDER_ELO,
   getEloTier,
   getLowEloSearchConfig,
@@ -111,21 +122,37 @@ const QUALITY_STYLE: Record<MoveQuality, string> = {
   blunder: "text-rose-400 font-semibold",
 };
 
+export interface RatingBannerState {
+  diff: number;
+  rating: number;
+  rd: number;
+  result: GameOutcomeLabel;
+  opponentElo: number;
+  reason: string;
+}
+
 export default function Trainer() {
   const analysisRef = useRef<StockfishEngine | null>(null);
   const opponentRef = useRef<StockfishEngine | null>(null);
   const moveStartTimestampRef = useRef<Record<number, number>>({});
   const requestedCoachPliesRef = useRef<Set<number>>(new Set());
+  const ratedGameIdRef = useRef<number>(-1);
 
   // Single source of truth: UCI moves from the initial position.
   const [moves, setMoves] = useState<string[]>([]);
   const [resync, setResync] = useState(0);
   const [gameId, setGameId] = useState(0);
+  const [resigned, setResigned] = useState(false);
   const [playerColor, setPlayerColor] = useState<Color>("w");
   const [colorChoice, setColorChoice] = useState<ColorChoice>("w");
   const [elo, setElo] = useState(1500);
   const [fullStrength, setFullStrength] = useState(false);
+  const [matchMyRating, setMatchMyRating] = useState(false);
   const [eloRange, setEloRange] = useState({ min: 1320, max: 3190 });
+  const [playerRating, setPlayerRating] = useState<PlayerRatingState>(() =>
+    createInitialPlayerRatingState(),
+  );
+  const [ratingBanner, setRatingBanner] = useState<RatingBannerState | null>(null);
   const [engineReady, setEngineReady] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
   const [flipped, setFlipped] = useState(false);
@@ -159,12 +186,45 @@ export default function Trainer() {
   const turn = game.turn();
   const history: Move[] = useMemo(() => game.history({ verbose: true }), [game]);
   const terminal = useMemo(() => terminalEval(game), [game]);
-  const overText = gameOverText(game, playerColor);
+  const overText = resigned ? "You resigned. Stockfish wins." : gameOverText(game, playerColor);
   const thinking = engineReady && !overText && turn !== playerColor;
+  const displayedElo = Math.max(MIN_SLIDER_ELO, Math.min(eloRange.max, Math.round(elo)));
+  const effectiveOpponentElo = fullStrength ? eloRange.max : displayedElo;
 
-  // ---- Engines lifecycle -------------------------------------------------------------
+  const recordFinishedGame = useCallback(
+    (resultScore: GameResultScore, reason: string) => {
+      if (ratedGameIdRef.current === gameId) return;
+      ratedGameIdRef.current = gameId;
+
+      setPlayerRating((prev) => {
+        const next = updatePlayerRating(prev, effectiveOpponentElo, resultScore);
+        savePlayerRatingState(next);
+        const latest = next.history.at(-1);
+        setRatingBanner({
+          diff: latest?.diff ?? next.rating - prev.rating,
+          rating: next.rating,
+          rd: next.rd,
+          result: latest?.result ?? (resultScore === 1 ? "win" : resultScore === 0 ? "loss" : "draw"),
+          opponentElo: effectiveOpponentElo,
+          reason,
+        });
+        if (matchMyRating) {
+          setElo(Math.max(MIN_SLIDER_ELO, Math.min(eloRange.max, next.rating)));
+        }
+        return next;
+      });
+    },
+    [effectiveOpponentElo, eloRange.max, gameId, matchMyRating],
+  );
+
+  // ---- Engines & localStorage hydration lifecycle ------------------------------------
   useEffect(() => {
     let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) {
+        setPlayerRating(loadPlayerRatingState());
+      }
+    });
     const analysis = new StockfishEngine();
     const opponent = new StockfishEngine();
     analysisRef.current = analysis;
@@ -382,6 +442,17 @@ export default function Trainer() {
       if (!chosenMove) return;
       moveStartTimestampRef.current[ply] = performance.now();
       setSelectedPly(null);
+      try {
+        const nextGame = new Chess(fen);
+        nextGame.move(splitUciMove(chosenMove));
+        if (nextGame.isGameOver()) {
+          const resultScore: GameResultScore = nextGame.isCheckmate() ? 0 : 0.5;
+          const reason = gameOverText(nextGame, playerColor) ?? "Game over.";
+          recordFinishedGame(resultScore, reason);
+        }
+      } catch {
+        // ignore invalid move check
+      }
       setMoves((ms) => (ms.length === ply ? [...ms, chosenMove] : ms));
     })().catch(() => undefined);
     return () => {
@@ -394,15 +465,21 @@ export default function Trainer() {
   const applyMove = useCallback(
     (from: Square, to: Square, promotion?: PromoPiece) => {
       try {
-        const m = new Chess(fen).move({ from, to, promotion });
+        const nextGame = new Chess(fen);
+        const m = nextGame.move({ from, to, promotion });
         moveStartTimestampRef.current[moves.length] = performance.now();
         setSelectedPly(null);
         setMoves((ms) => [...ms, m.lan]);
+        if (nextGame.isGameOver()) {
+          const resultScore: GameResultScore = nextGame.isCheckmate() ? 1 : 0.5;
+          const reason = gameOverText(nextGame, playerColor) ?? "Game over.";
+          recordFinishedGame(resultScore, reason);
+        }
       } catch {
         setResync((n) => n + 1); // illegal: snap the board back
       }
     },
-    [fen, moves.length],
+    [fen, moves.length, playerColor, recordFinishedGame],
   );
 
   const onBoardMove = useCallback(
@@ -422,6 +499,8 @@ export default function Trainer() {
     const color: Color = colorChoice === "random" ? (Math.random() < 0.5 ? "w" : "b") : colorChoice;
     setPlayerColor(color);
     setFlipped(false);
+    setResigned(false);
+    setRatingBanner(null);
     setPendingPromo(null);
     setCoachStreams({});
     setSelectedPly(null);
@@ -432,6 +511,34 @@ export default function Trainer() {
     setMoves([]);
     setGameId((n) => n + 1);
   }, [colorChoice]);
+
+  const resign = useCallback(() => {
+    if (overText || history.length === 0) return;
+    opponentRef.current?.stop();
+    setPendingPromo(null);
+    setResigned(true);
+    recordFinishedGame(0, "You resigned. Stockfish wins.");
+  }, [history.length, overText, recordFinishedGame]);
+
+  const handleResetRating = useCallback(() => {
+    const reset = resetPlayerRatingState();
+    setPlayerRating(reset);
+    setRatingBanner(null);
+    if (matchMyRating) {
+      setElo(reset.rating);
+    }
+  }, [matchMyRating]);
+
+  const handleToggleMatchMyRating = useCallback(
+    (checked: boolean) => {
+      setMatchMyRating(checked);
+      if (checked) {
+        setFullStrength(false);
+        setElo(Math.max(MIN_SLIDER_ELO, Math.min(eloRange.max, Math.round(playerRating.rating))));
+      }
+    },
+    [eloRange.max, playerRating.rating],
+  );
 
   /** Take back to the player's previous turn (removes the engine reply too). */
   const undo = useCallback(() => {
@@ -518,8 +625,8 @@ export default function Trainer() {
     return out;
   }, [showHints, showMotifArrows, turn, playerColor, currentLines, activePly, motifsByPly]);
 
-  const displayedElo = Math.max(MIN_SLIDER_ELO, Math.min(eloRange.max, Math.round(elo)));
   const eloTier = getEloTier(displayedElo, fullStrength);
+  const playerTier = getEloTier(playerRating.rating, false);
   const eloProgressPct = fullStrength
     ? 100
     : Math.max(
@@ -529,6 +636,18 @@ export default function Trainer() {
           Math.round(((displayedElo - MIN_SLIDER_ELO) / (eloRange.max - MIN_SLIDER_ELO)) * 100),
         ),
       );
+
+  const wdlSummary = useMemo(() => {
+    let w = 0;
+    let d = 0;
+    let l = 0;
+    for (const h of playerRating.history) {
+      if (h.result === "win") w++;
+      else if (h.result === "draw") d++;
+      else l++;
+    }
+    return { w, d, l };
+  }, [playerRating.history]);
 
   const status = engineError
     ? `Engine failed to load: ${engineError}`
@@ -622,11 +741,84 @@ export default function Trainer() {
           </div>
         </div>
 
-        {/* Bottom bar below board: Player label on left, crisp white eval/move pill on right */}
-        <div className="flex max-w-[min(82vh,700px)] items-center justify-between px-0.5">
-          <span className="text-xl font-bold tracking-tight text-white">
-            You <span className="text-sm font-medium text-neutral-400">({playerColor === "w" ? "White" : "Black"})</span>
-          </span>
+        {/* Animated Glicko-2 Rating Change Banner when a game concludes */}
+        {ratingBanner && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex max-w-[min(82vh,700px)] flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/15 bg-[#221d31]/95 px-4 py-3 shadow-2xl transition-all duration-300"
+          >
+            <div className="flex flex-wrap items-center gap-3">
+              <span
+                className={`inline-flex items-center rounded-xl border px-3 py-1 font-mono text-sm font-extrabold tracking-tight shadow-sm ${
+                  ratingBanner.diff > 0
+                    ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-300"
+                    : ratingBanner.diff < 0
+                      ? "border-rose-400/50 bg-rose-500/20 text-rose-300"
+                      : "border-amber-400/50 bg-amber-500/20 text-amber-200"
+                }`}
+              >
+                {ratingBanner.diff >= 0 ? `+${ratingBanner.diff}` : ratingBanner.diff} Rating
+              </span>
+              <div className="text-xs">
+                <p className="font-bold text-white">{ratingBanner.reason}</p>
+                <p className="text-neutral-300">
+                  Updated Glicko-2:{" "}
+                  <span className="font-mono font-semibold text-[#ff9ce0]">
+                    {ratingBanner.rating} ± {ratingBanner.rd}
+                  </span>{" "}
+                  <span className="text-neutral-400">(vs {ratingBanner.opponentElo} Elo)</span>
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={newGame}
+              className="owlchess-btn-primary rounded-xl px-3.5 py-1.5 text-xs font-bold tracking-wide"
+            >
+              Play again
+            </button>
+          </div>
+        )}
+
+        {/* Bottom bar below board: Player label + live Glicko-2 rating badge on left, eval pill on right */}
+        <div className="flex max-w-[min(82vh,700px)] flex-wrap items-center justify-between gap-2 px-0.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xl font-bold tracking-tight text-white">
+              You{" "}
+              <span className="text-sm font-medium text-neutral-400">
+                ({playerColor === "w" ? "White" : "Black"})
+              </span>
+            </span>
+
+            {/* Live Player Glicko-2 Rating Badge (e.g. "1524 ± 65") */}
+            <span
+              className="rounded-md bg-[#171321] px-2.5 py-1 font-mono text-sm font-bold tracking-tight text-[#ff9ce0] shadow-inner ring-1 ring-[#ee66b7]/30"
+              title={`Your Glicko-2 Rating: ${formatGlickoBadge(playerRating)} (Volatility σ=${playerRating.vol})`}
+            >
+              {formatGlickoBadge(playerRating)}
+            </span>
+
+            <span className="rounded-full border border-white/15 bg-[#352f49]/80 px-2.5 py-0.5 text-[11px] font-semibold text-neutral-200">
+              {playerTier}
+            </span>
+
+            {playerRating.gamesPlayed > 0 && (
+              <span className="font-mono text-[11px] text-neutral-400">
+                {wdlSummary.w}W-{wdlSummary.d}D-{wdlSummary.l}L
+              </span>
+            )}
+
+            <button
+              type="button"
+              onClick={handleResetRating}
+              className="rounded-md border border-white/10 bg-[#2a243b] px-2 py-0.5 text-[11px] font-medium text-neutral-300 transition hover:border-white/30 hover:bg-[#38304e] hover:text-white"
+              title="Reset your Glicko-2 rating back to 1500 ± 350"
+            >
+              Reset Rating
+            </button>
+          </div>
+
           <div className="rounded-md bg-[#f5f5f8] px-3.5 py-1 font-mono text-lg font-bold tracking-tight text-[#181424] shadow">
             {currentScore ? formatScore(currentScore) : "0.00"}
           </div>
@@ -686,7 +878,10 @@ export default function Trainer() {
                   step={25}
                   value={displayedElo}
                   disabled={fullStrength}
-                  onChange={(e) => setElo(Number(e.target.value))}
+                  onChange={(e) => {
+                    setMatchMyRating(false);
+                    setElo(Number(e.target.value));
+                  }}
                   aria-label="Stockfish Elo"
                   className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
                 />
@@ -696,7 +891,10 @@ export default function Trainer() {
             {/* Outlined pill button matching "FINISH" in screenshot 4 */}
             <button
               type="button"
-              onClick={() => setFullStrength((v) => !v)}
+              onClick={() => {
+                setMatchMyRating(false);
+                setFullStrength((v) => !v);
+              }}
               className={`shrink-0 rounded-full border px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition ${
                 fullStrength
                   ? "border-[#ee66b7] bg-[#df3ca9] text-white shadow-[0_0_12px_rgba(223,60,169,0.5)]"
@@ -706,6 +904,22 @@ export default function Trainer() {
             >
               {fullStrength ? "MAX ON" : "MAX"}
             </button>
+          </div>
+
+          {/* Match Opponent to My Rating toggle row */}
+          <div className="flex items-center justify-between rounded-xl bg-[#181424]/70 px-3 py-2 text-xs">
+            <label className="flex cursor-pointer items-center gap-2 font-medium text-neutral-200">
+              <input
+                type="checkbox"
+                checked={matchMyRating}
+                onChange={(e) => handleToggleMatchMyRating(e.target.checked)}
+                className="accent-[#df3ca9]"
+              />
+              <span>Match Opponent to My Rating</span>
+            </label>
+            <span className="font-mono text-[11px] text-[#ff9ce0]">
+              {formatGlickoBadge(playerRating)}
+            </span>
           </div>
 
           {/* Action Toolbar Row: Play-as pills + Signature OWLChess CTA + Icon controls */}
@@ -727,20 +941,28 @@ export default function Trainer() {
               ))}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <button
                 onClick={newGame}
-                className="owlchess-btn-primary rounded-xl px-4 py-1.5 text-xs font-bold tracking-wide"
+                className="owlchess-btn-primary rounded-xl px-3.5 py-1.5 text-xs font-bold tracking-wide"
               >
                 New game
               </button>
               <button
                 onClick={undo}
-                disabled={history.length === 0}
+                disabled={history.length === 0 || Boolean(overText)}
                 className="rounded-lg bg-[#352f49] px-2.5 py-1.5 text-xs font-semibold text-neutral-100 transition hover:bg-[#433b5c] disabled:opacity-35"
                 title="Take back move"
               >
                 Undo
+              </button>
+              <button
+                onClick={resign}
+                disabled={history.length === 0 || Boolean(overText)}
+                className="rounded-lg bg-[#352f49] px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/25 disabled:opacity-35"
+                title="Resign current game"
+              >
+                Resign
               </button>
               <button
                 onClick={() => setFlipped((f) => !f)}

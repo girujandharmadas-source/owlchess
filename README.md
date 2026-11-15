@@ -31,6 +31,10 @@
 5. **Under-5s Streamed AI Coach Card**
    - Streams a structured 3-part breakdown (**1. Move & Tactic**, **2. Why It Matters**, **3. Master Game Context**) into the OWLChess speech-bubble card.
    - Supports live **Gemini 3.5 Flash-Lite** streaming (`thinkingBudget: 0` for sub-second time-to-first-token) via `GEMINI_API_KEY` or the in-app **API Key** input, and works out-of-the-box with zero configuration using the built-in deterministic coach synthesizer.
+6. **Client-Side Glicko-2 Player Rating Tracker (`src/lib/glicko2.ts`)**
+   - Tracks your live rating (`r`), Rating Deviation (`RD`), and Volatility (`σ`) across games using the official **Mark Glickman Glicko-2** specification (`r₀ = 1500`, `RD₀ = 350`, `σ₀ = 0.06`, `τ = 0.5`).
+   - Persists your rating progression and game history in `localStorage` under `owlchess_player_rating` with zero external database dependencies.
+   - Displays your live Glicko-2 badge (`e.g. 1524 ± 65`), W-D-L record, an animated post-game rating delta banner (`+18 Rating` / `-14 Rating`), a **Reset Rating** control, and a **Match Opponent to My Rating** toggle that automatically syncs the Stockfish slider to your current Glicko-2 rating.
 
 ---
 
@@ -68,7 +72,8 @@ User / Stockfish 19 Plays Move
 | **Tactical Bitboards** | `chessops` (attack maps, sliding rays, pins, skewers, forks, zwischenzugs) |
 | **Master Games API** | Lichess Opening Explorer (`explorer.lichess.ovh/masters`) + curated ECO book |
 | **AI Coach** | `gemini-3.5-flash-lite` (SSE streaming) + deterministic grounded fallback |
-| **Testing** | Vitest (`43` unit & real Stockfish WASM integration tests) |
+| **Player Rating System** | Official Glicko-2 (`r`, `RD`, `σ` via Illinois solver) persisted in `localStorage` |
+| **Testing** | Vitest (`50` unit & real Stockfish WASM integration tests) |
 
 ---
 
@@ -107,7 +112,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🧪 Running the Test Suite
 
-Run all 43 unit and integration tests via Vitest:
+Run all 50 unit and integration tests via Vitest:
 
 ```bash
 npm test
@@ -115,6 +120,7 @@ npm test
 
 - `src/lib/uci.test.ts` (13 tests): UCI `info`/`bestmove`/`option` parsing, White-POV score conversion, Lichess win-probability math, Elo clamping.
 - `src/lib/lowElo.test.ts` (6 tests): Skill tier mapping (`Beginner` through `Master / Grandmaster`), depth-limited `MultiPV=4` search configs, temperature probability curves across candidates 1–4, and `>600 cp` Queen-blunder / mate-in-1 safety filtering.
+- `src/lib/glicko2.test.ts` (7 tests): Official Glicko-2 rating updates on win/draw/loss, opponent Elo expectation scaling, multi-game RD narrowing, and `localStorage` (`owlchess_player_rating`) persistence & reset.
 - `src/lib/classify.test.ts` (6 tests): Move quality classification (`best`, `good`, `inaccuracy`, `mistake`, `blunder`).
 - `src/lib/motifs.test.ts` (7 tests): Deterministic detection of forks, absolute pins, skewers, discovered checks, zwischenzugs, hanging pieces, and center control.
 - `src/lib/openings.test.ts` (3 tests): FEN key normalization, curated opening book matching, and Lichess Masters payload parsing.
