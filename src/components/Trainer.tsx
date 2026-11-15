@@ -11,6 +11,12 @@ import EvalBar from "./EvalBar";
 import { type MoveQuality, QUALITY_GLYPH, classifyMove } from "@/lib/classify";
 import { type CoachPayload, formatMoveNotation } from "@/lib/coach";
 import { type AnalysisLine, StockfishEngine } from "@/lib/engine";
+import {
+  MIN_SLIDER_ELO,
+  getEloTier,
+  getLowEloSearchConfig,
+  selectLowEloMove,
+} from "@/lib/lowElo";
 import { type MotifDetectionResult, detectMotifs } from "@/lib/motifs";
 import type { MastersLookupResult } from "@/lib/openings";
 import { type Score, clampElo, formatScore, splitUciMove } from "@/lib/uci";
@@ -353,14 +359,30 @@ export default function Trainer() {
     let cancelled = false;
     const ply = moves.length;
     (async () => {
-      await engine.setStrength(fullStrength ? null : clampElo(elo, engine.eloRange));
-      const movetime = fullStrength ? 1000 : 450 + Math.random() * 450;
-      const res = await engine.search(fen, { movetime });
-      if (cancelled || !res?.bestmove) return;
-      const best = res.bestmove;
+      const lowEloCfg = fullStrength ? null : getLowEloSearchConfig(elo);
+      let chosenMove: string | null = null;
+      if (lowEloCfg) {
+        // 600–1319 Elo: disable UCI_LimitStrength and run MultiPV=4 depth-limited candidate blending
+        await engine.setStrength(null);
+        const res = await engine.search(fen, {
+          movetime: lowEloCfg.movetime,
+          depth: lowEloCfg.depth,
+          multipv: lowEloCfg.multipv,
+        });
+        if (cancelled) return;
+        chosenMove = (res ? selectLowEloMove(res.lines, elo) : null) ?? res?.bestmove ?? null;
+      } else {
+        // 1320+ Elo: native Stockfish UCI_LimitStrength + UCI_Elo (or unthrottled MAX)
+        await engine.setStrength(fullStrength ? null : clampElo(elo, engine.eloRange));
+        const movetime = fullStrength ? 1000 : 450 + Math.random() * 450;
+        const res = await engine.search(fen, { movetime });
+        if (cancelled) return;
+        chosenMove = res?.bestmove ?? null;
+      }
+      if (!chosenMove) return;
       moveStartTimestampRef.current[ply] = performance.now();
       setSelectedPly(null);
-      setMoves((ms) => (ms.length === ply ? [...ms, best] : ms));
+      setMoves((ms) => (ms.length === ply ? [...ms, chosenMove] : ms));
     })().catch(() => undefined);
     return () => {
       cancelled = true;
@@ -496,13 +518,25 @@ export default function Trainer() {
     return out;
   }, [showHints, showMotifArrows, turn, playerColor, currentLines, activePly, motifsByPly]);
 
+  const displayedElo = Math.max(MIN_SLIDER_ELO, Math.min(eloRange.max, Math.round(elo)));
+  const eloTier = getEloTier(displayedElo, fullStrength);
+  const eloProgressPct = fullStrength
+    ? 100
+    : Math.max(
+        6,
+        Math.min(
+          100,
+          Math.round(((displayedElo - MIN_SLIDER_ELO) / (eloRange.max - MIN_SLIDER_ELO)) * 100),
+        ),
+      );
+
   const status = engineError
     ? `Engine failed to load: ${engineError}`
     : !engineReady
       ? "Loading Stockfish 19…"
       : (overText ??
         (thinking
-          ? `Stockfish (${fullStrength ? "full strength" : clampElo(elo, eloRange)}) is thinking…`
+          ? `OWLChess (${fullStrength ? "full strength" : `${displayedElo} · ${eloTier}`}) is thinking…`
           : "Your move."));
 
   const movePairs: { no: number; w: number; b?: number }[] = [];
@@ -540,28 +574,23 @@ export default function Trainer() {
     );
   };
 
-  const clampedElo = clampElo(elo, eloRange) ?? eloRange.min;
-  const eloProgressPct = fullStrength
-    ? 100
-    : Math.max(
-        6,
-        Math.min(100, Math.round(((clampedElo - eloRange.min) / (eloRange.max - eloRange.min)) * 100)),
-      );
-
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-5 lg:flex-row lg:items-start lg:gap-10">
       {/* Left column: Opponent header bar + Board + Player footer bar (matches screenshot 4) */}
       <div className="flex w-full flex-col gap-2.5 lg:w-auto lg:flex-1">
-        {/* Top bar above board: Bot name on left, dark rating badge on right */}
+        {/* Top bar above board: Bot name + Skill Tier badge on left, dark rating badge on right */}
         <div className="flex max-w-[min(82vh,700px)] items-center justify-between px-0.5">
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             <span className="text-xl font-bold tracking-tight text-white">OWLChess · Stockfish 19</span>
+            <span className="rounded-full border border-[#ee66b7]/40 bg-[#df3ca9]/20 px-2.5 py-0.5 text-xs font-semibold text-[#ff9ce0]">
+              {eloTier}
+            </span>
             {thinking && (
               <span className="inline-block h-2.5 w-2.5 animate-ping rounded-full bg-[#ee66b7]" />
             )}
           </div>
           <div className="rounded-md bg-[#171321] px-3.5 py-1 font-mono text-lg font-bold tracking-tight text-white shadow-inner ring-1 ring-white/10">
-            {fullStrength ? "MAX" : clampedElo}
+            {fullStrength ? "MAX" : displayedElo}
           </div>
         </div>
 
@@ -637,10 +666,10 @@ export default function Trainer() {
             <div className="min-w-0 flex-1 space-y-1.5">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm font-bold tracking-tight text-white">
-                  Opponent Elo level
+                  Opponent Elo · <span className="text-[#ff9ce0]">{eloTier}</span>
                 </span>
                 <span className="font-mono text-xs font-bold text-[#ff8ad8]">
-                  {fullStrength ? "MAX (3190+)" : `${clampedElo} Elo`}
+                  {fullStrength ? "MAX (3190+)" : `${displayedElo} Elo`}
                 </span>
               </div>
 
@@ -652,10 +681,10 @@ export default function Trainer() {
                 />
                 <input
                   type="range"
-                  min={eloRange.min}
+                  min={MIN_SLIDER_ELO}
                   max={eloRange.max}
-                  step={10}
-                  value={clampedElo}
+                  step={25}
+                  value={displayedElo}
                   disabled={fullStrength}
                   onChange={(e) => setElo(Number(e.target.value))}
                   aria-label="Stockfish Elo"

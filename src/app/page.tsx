@@ -27,7 +27,7 @@ export default function Home() {
               OWLChess <span className="font-normal text-neutral-400">· A chess bot built for your training</span>
             </h1>
             <p className="text-[11px] text-neutral-400">
-              Stockfish 19 (1320–3190+ Elo) · Deterministic Tactical Motifs · Lichess Masters · Sub-5s AI Coach
+              Stockfish 19 (600–3190+ Elo) · Deterministic Tactical Motifs · Lichess Masters · Sub-5s AI Coach
             </p>
           </div>
         </div>

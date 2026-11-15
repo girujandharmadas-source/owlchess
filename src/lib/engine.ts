@@ -27,6 +27,7 @@ export interface SearchResult {
 
 export interface SearchOptions {
   movetime: number;
+  depth?: number;
   multipv?: number;
   onInfo?: (lines: AnalysisLine[]) => void;
 }
@@ -158,7 +159,8 @@ export class StockfishEngine {
           if (gen === this.generation) opts.onInfo?.(lines.slice());
         },
       );
-      this.send(`go movetime ${Math.max(50, Math.round(opts.movetime))}`);
+      const depthArg = opts.depth ? ` depth ${Math.max(1, Math.round(opts.depth))}` : "";
+      this.send(`go${depthArg} movetime ${Math.max(50, Math.round(opts.movetime))}`);
       const bestLine = await done;
       this.searching = false;
       return {

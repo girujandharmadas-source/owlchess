@@ -8,9 +8,13 @@
 
 ## ✨ Key Features
 
-1. **Adjustable Stockfish 19 Opponent (`1320` to `3190+` Elo)**
+1. **Adjustable Stockfish 19 Opponent (`600` to `3190+` Elo)**
    - Runs two independent **Stockfish 19 (`stockfish-19-lite-single.wasm`)** Web Workers directly in the browser with zero server latency.
-   - Dial the opponent's playing strength anywhere from `1320` to `3190` Elo via `UCI_LimitStrength` + `UCI_Elo`, or toggle **MAX** for unthrottled engine play.
+   - **600 – 1319 Elo (Randomized Depth-Blending Engine, `src/lib/lowElo.ts`)**: Because Stockfish's native `UCI_Elo` floor is `1320`, ratings below `1320` use `MultiPV = 4` at constrained depths (`depth 1–5`, `120–240ms`) combined with a temperature-weighted candidate probability curve and a blunder safety filter (`>600 cp` Queen-hang & mate-in-1 protection):
+     - **600 – 799 (`Beginner`)**: Depth 1–2 (`T = 240 cp`), frequently selects the 2nd, 3rd, or 4th candidate move to simulate natural beginner oversights.
+     - **800 – 1099 (`Novice`)**: Depth 2–3 (`T = 120 cp`, `≤350 cp` loss cap), favors candidates 1 & 2 while occasionally picking a playable candidate 3.
+     - **1100 – 1319 (`Intermediate`)**: Depth 3–5 (`T = 65 cp`, `≤140 cp` loss cap), plays candidate 1 or 2 within tight centipawn margins.
+   - **1320 – 3190+ Elo (`Advanced` & `Master / Grandmaster`)**: Smoothly switches to native Stockfish `UCI_LimitStrength` + `UCI_Elo`, or toggle **MAX** for unthrottled engine play.
 2. **Continuous MultiPV=3 Live Analysis & Move Grading**
    - A dedicated analysis worker evaluates every position with `MultiPV = 3`, updating a Lichess-style win-probability **Eval Bar** and grading every move (`★ Best`, `✓ Solid`, `?! Inaccuracy`, `? Mistake`, `?? Blunder`) using Lichess win-probability loss thresholds.
 3. **Deterministic Tactical Motif Detector (`chessops`)**
@@ -64,7 +68,7 @@ User / Stockfish 19 Plays Move
 | **Tactical Bitboards** | `chessops` (attack maps, sliding rays, pins, skewers, forks, zwischenzugs) |
 | **Master Games API** | Lichess Opening Explorer (`explorer.lichess.ovh/masters`) + curated ECO book |
 | **AI Coach** | `gemini-3.5-flash-lite` (SSE streaming) + deterministic grounded fallback |
-| **Testing** | Vitest (`37` unit & real Stockfish WASM integration tests) |
+| **Testing** | Vitest (`43` unit & real Stockfish WASM integration tests) |
 
 ---
 
@@ -103,13 +107,14 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🧪 Running the Test Suite
 
-Run all 37 unit and integration tests via Vitest:
+Run all 43 unit and integration tests via Vitest:
 
 ```bash
 npm test
 ```
 
 - `src/lib/uci.test.ts` (13 tests): UCI `info`/`bestmove`/`option` parsing, White-POV score conversion, Lichess win-probability math, Elo clamping.
+- `src/lib/lowElo.test.ts` (6 tests): Skill tier mapping (`Beginner` through `Master / Grandmaster`), depth-limited `MultiPV=4` search configs, temperature probability curves across candidates 1–4, and `>600 cp` Queen-blunder / mate-in-1 safety filtering.
 - `src/lib/classify.test.ts` (6 tests): Move quality classification (`best`, `good`, `inaccuracy`, `mistake`, `blunder`).
 - `src/lib/motifs.test.ts` (7 tests): Deterministic detection of forks, absolute pins, skewers, discovered checks, zwischenzugs, hanging pieces, and center control.
 - `src/lib/openings.test.ts` (3 tests): FEN key normalization, curated opening book matching, and Lichess Masters payload parsing.
