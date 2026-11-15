@@ -8,6 +8,7 @@ import type { Key } from "chessground/types";
 import Board from "./Board";
 import CoachCard, { type CoachReport } from "./CoachCard";
 import EvalBar from "./EvalBar";
+import { ResumeSessionModal, SaveSessionModal } from "./SessionModals";
 import { type MoveQuality, QUALITY_GLYPH, classifyMove } from "@/lib/classify";
 import { type CoachPayload, formatMoveNotation } from "@/lib/coach";
 import { type AnalysisLine, StockfishEngine } from "@/lib/engine";
@@ -30,6 +31,11 @@ import {
 } from "@/lib/lowElo";
 import { type MotifDetectionResult, detectMotifs } from "@/lib/motifs";
 import type { MastersLookupResult } from "@/lib/openings";
+import {
+  type SessionPayload,
+  importSessionFromHash,
+  profileToRatingState,
+} from "@/lib/session";
 import { type Score, clampElo, formatScore, splitUciMove } from "@/lib/uci";
 
 type Color = "w" | "b";
@@ -170,6 +176,8 @@ export default function Trainer() {
   const [selectedPly, setSelectedPly] = useState<number | null>(null);
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [pendingPromo, setPendingPromo] = useState<{ from: Square; to: Square } | null>(null);
+  const [activeModal, setActiveModal] = useState<"save" | "resume" | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
   const game = useMemo(() => {
     const g = new Chess();
@@ -217,11 +225,49 @@ export default function Trainer() {
     [effectiveOpponentElo, eloRange.max, gameId, matchMyRating],
   );
 
-  // ---- Engines & localStorage hydration lifecycle ------------------------------------
+  const applySessionPayload = useCallback((payload: SessionPayload, sourceLabel: string) => {
+    analysisRef.current?.newGame();
+    opponentRef.current?.newGame();
+    requestedCoachPliesRef.current.clear();
+    moveStartTimestampRef.current = {};
+
+    const restoredRating = profileToRatingState(payload.playerProfile);
+    savePlayerRatingState(restoredRating);
+    setPlayerRating(restoredRating);
+
+    const restoredColor: Color = payload.currentGame.orientation === "black" ? "b" : "w";
+    setPlayerColor(restoredColor);
+    setColorChoice(restoredColor);
+    setFlipped(false);
+    setResigned(false);
+    setRatingBanner(null);
+    setPendingPromo(null);
+    setCoachStreams({});
+    setSelectedPly(null);
+    setFullStrength(false);
+    setElo(payload.currentGame.opponentElo);
+    setMoves(payload.currentGame.moves);
+    setGameId((n) => n + 1);
+    setActiveModal(null);
+    setSessionNotice(sourceLabel);
+    setTimeout(() => setSessionNotice(null), 4000);
+  }, []);
+
+  // ---- Engines & localStorage / URL hash hydration lifecycle -------------------------
   useEffect(() => {
     let cancelled = false;
     Promise.resolve().then(() => {
-      if (!cancelled) {
+      if (cancelled) return;
+      const rawHash = typeof window !== "undefined" ? window.location.hash : "";
+      const hashPayload = rawHash ? importSessionFromHash(rawHash) : null;
+      if (hashPayload) {
+        applySessionPayload(hashPayload, "Session restored from Magic Link!");
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.search,
+        );
+      } else {
         setPlayerRating(loadPlayerRatingState());
       }
     });
@@ -246,7 +292,7 @@ export default function Trainer() {
       analysisRef.current = null;
       opponentRef.current = null;
     };
-  }, []);
+  }, [applySessionPayload]);
 
   // ---- Parallel 1: Continuous Stockfish 19 MultiPV analysis -------------------------
   useEffect(() => {
@@ -649,6 +695,26 @@ export default function Trainer() {
     return { w, d, l };
   }, [playerRating.history]);
 
+  const currentSessionPayload: SessionPayload = useMemo(
+    () => ({
+      version: 1,
+      currentGame: {
+        fen,
+        moves,
+        opponentElo: effectiveOpponentElo,
+        orientation: playerColor === "b" ? "black" : "white",
+      },
+      playerProfile: {
+        rating: playerRating.rating,
+        rd: playerRating.rd,
+        vol: playerRating.vol,
+        gamesPlayed: playerRating.gamesPlayed,
+        history: playerRating.history,
+      },
+    }),
+    [effectiveOpponentElo, fen, moves, playerColor, playerRating],
+  );
+
   const status = engineError
     ? `Engine failed to load: ${engineError}`
     : !engineReady
@@ -973,6 +1039,35 @@ export default function Trainer() {
               </button>
             </div>
           </div>
+
+          {/* Session Save & Resume Toolbar Row (Magic Link + QR Code) */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
+            <span className="text-[11px] font-medium text-neutral-400">
+              {sessionNotice ? (
+                <span className="font-semibold text-emerald-300">✓ {sessionNotice}</span>
+              ) : (
+                "Sync session across devices (Magic Link / QR)"
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveModal("save")}
+                className="rounded-lg border border-[#ee66b7]/40 bg-[#df3ca9]/20 px-3 py-1 text-xs font-bold text-[#ff9ce0] transition hover:bg-[#df3ca9]/35"
+                title="Generate Magic Link & downloadable QR Code for current game and Glicko-2 rating"
+              >
+                Save Game
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveModal("resume")}
+                className="rounded-lg border border-white/15 bg-[#352f49] px-3 py-1 text-xs font-bold text-neutral-100 transition hover:bg-[#433b5c]"
+                title="Upload a saved QR Code image or paste a Magic Link to resume"
+              >
+                Resume Game
+              </button>
+            </div>
+          </div>
         </section>
 
         {/* Engine Lines (MultiPV 3) */}
@@ -1045,6 +1140,22 @@ export default function Trainer() {
           </p>
         </section>
       </aside>
+
+      {activeModal === "save" && (
+        <SaveSessionModal
+          payload={currentSessionPayload}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
+      {activeModal === "resume" && (
+        <ResumeSessionModal
+          onRestore={(payload) =>
+            applySessionPayload(payload, "Session restored from QR / Magic Link!")
+          }
+          onClose={() => setActiveModal(null)}
+        />
+      )}
     </div>
   );
 }

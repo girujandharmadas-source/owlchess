@@ -33,8 +33,12 @@
    - Supports live **Gemini 3.5 Flash-Lite** streaming (`thinkingBudget: 0` for sub-second time-to-first-token) via `GEMINI_API_KEY` or the in-app **API Key** input, and works out-of-the-box with zero configuration using the built-in deterministic coach synthesizer.
 6. **Client-Side Glicko-2 Player Rating Tracker (`src/lib/glicko2.ts`)**
    - Tracks your live rating (`r`), Rating Deviation (`RD`), and Volatility (`σ`) across games using the official **Mark Glickman Glicko-2** specification (`r₀ = 1500`, `RD₀ = 350`, `σ₀ = 0.06`, `τ = 0.5`).
-   - Persists your rating progression and game history in `localStorage` under `owlchess_player_rating` with zero external database dependencies.
-   - Displays your live Glicko-2 badge (`e.g. 1524 ± 65`), W-D-L record, an animated post-game rating delta banner (`+18 Rating` / `-14 Rating`), a **Reset Rating** control, and a **Match Opponent to My Rating** toggle that automatically syncs the Stockfish slider to your current Glicko-2 rating.
+   - Persists your rating progression and game history in `localStorage` under `owlchess_glicko2` (and `owlchess_player_rating`) with zero external database dependencies.
+   - Displays your live Glicko-2 badge (`e.g. 1540 ± 62`), W-D-L record, an animated post-game rating delta banner (`+18 Rating` / `-14 Rating`), a **Reset Rating** control, and a **Match Opponent to My Rating** toggle that automatically syncs the Stockfish slider to your current Glicko-2 rating.
+7. **Magic Link + Scannable/Downloadable QR Code Session Save & Resume (`src/lib/session.ts`, `src/components/SessionModals.tsx`)**
+   - **Save Game Modal**: Compresses your full session (`currentGame` FEN, UCI move list, opponent Elo, orientation, and `playerProfile` Glicko-2 rating + history) into a URL-safe `lz-string` hash (`/#save=...`) and renders a live scannable QR code (`qrcode.react`).
+   - **Download QR Code**: Exports the QR canvas as a PNG dynamically named with today's date (`owlchess-save-YYYY-MM-DD.png`) or copies the Magic Link URL with one click.
+   - **Resume Game Modal & Auto-Hydration**: Drag-and-drop or browse for any saved QR image (decoded client-side via `jsqr`), paste a Magic Link, or open a `/#save=...` URL directly in any browser to instantly restore your board, move list, and Glicko-2 rating (while automatically cleaning the URL bar via `history.replaceState`).
 
 ---
 
@@ -72,8 +76,9 @@ User / Stockfish 19 Plays Move
 | **Tactical Bitboards** | `chessops` (attack maps, sliding rays, pins, skewers, forks, zwischenzugs) |
 | **Master Games API** | Lichess Opening Explorer (`explorer.lichess.ovh/masters`) + curated ECO book |
 | **AI Coach** | `gemini-3.5-flash-lite` (SSE streaming) + deterministic grounded fallback |
-| **Player Rating System** | Official Glicko-2 (`r`, `RD`, `σ` via Illinois solver) persisted in `localStorage` |
-| **Testing** | Vitest (`50` unit & real Stockfish WASM integration tests) |
+| **Player Rating System** | Official Glicko-2 (`r`, `RD`, `σ` via Illinois solver) persisted in `localStorage` (`owlchess_glicko2`) |
+| **Session Save & Handoff** | `lz-string` Magic Link URL hash (`/#save=...`) + `qrcode.react` PNG export + `jsqr` QR image decoder |
+| **Testing** | Vitest (`55` unit & real Stockfish WASM integration tests) |
 
 ---
 
@@ -112,7 +117,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🧪 Running the Test Suite
 
-Run all 50 unit and integration tests via Vitest:
+Run all 55 unit and integration tests via Vitest:
 
 ```bash
 npm test
@@ -120,7 +125,8 @@ npm test
 
 - `src/lib/uci.test.ts` (13 tests): UCI `info`/`bestmove`/`option` parsing, White-POV score conversion, Lichess win-probability math, Elo clamping.
 - `src/lib/lowElo.test.ts` (6 tests): Skill tier mapping (`Beginner` through `Master / Grandmaster`), depth-limited `MultiPV=4` search configs, temperature probability curves across candidates 1–4, and `>600 cp` Queen-blunder / mate-in-1 safety filtering.
-- `src/lib/glicko2.test.ts` (7 tests): Official Glicko-2 rating updates on win/draw/loss, opponent Elo expectation scaling, multi-game RD narrowing, and `localStorage` (`owlchess_player_rating`) persistence & reset.
+- `src/lib/glicko2.test.ts` (7 tests): Official Glicko-2 rating updates on win/draw/loss, opponent Elo expectation scaling, multi-game RD narrowing, and `localStorage` (`owlchess_glicko2`) persistence & reset.
+- `src/lib/session.test.ts` (5 tests): `lz-string` Magic Link hash compression/decompression (`exportSessionToHash` / `importSessionFromHash`), full URL parsing, illegal move validation, and `owlchess-save-YYYY-MM-DD.png` filename formatting.
 - `src/lib/classify.test.ts` (6 tests): Move quality classification (`best`, `good`, `inaccuracy`, `mistake`, `blunder`).
 - `src/lib/motifs.test.ts` (7 tests): Deterministic detection of forks, absolute pins, skewers, discovered checks, zwischenzugs, hanging pieces, and center control.
 - `src/lib/openings.test.ts` (3 tests): FEN key normalization, curated opening book matching, and Lichess Masters payload parsing.

@@ -17,7 +17,8 @@ export const GLICKO2_SCALE = 173.7178;
 export const ENGINE_OPPONENT_RD = 50;
 export const MIN_RD = 30;
 export const MAX_RD = 350;
-export const PLAYER_RATING_STORAGE_KEY = "owlchess_player_rating";
+export const PLAYER_RATING_STORAGE_KEY = "owlchess_glicko2";
+export const LEGACY_RATING_STORAGE_KEY = "owlchess_player_rating";
 
 export type GameResultScore = 1 | 0.5 | 0;
 export type GameOutcomeLabel = "win" | "loss" | "draw";
@@ -36,6 +37,10 @@ export interface PlayerRatingState {
   vol: number;
   gamesPlayed: number;
   history: RatingHistoryEntry[];
+}
+
+export interface RatingUpdateOutcome extends PlayerRatingState {
+  delta: number;
 }
 
 export function createInitialPlayerRatingState(): PlayerRatingState {
@@ -119,20 +124,21 @@ function computeNewVolatility(
  *
  * @param playerState Current player rating state (rating, rd, vol, gamesPlayed, history)
  * @param opponentElo Engine opponent Elo rating (e.g. 600 to 3190)
- * @param gameResult  1 for player win, 0.5 for draw, 0 for player loss
+ * @param result      1 for player win, 0.5 for draw, 0 for player loss
  * @param nowIso      Optional ISO timestamp for deterministic testing
  */
-export function updatePlayerRating(
+export function updateRating(
   playerState: PlayerRatingState,
   opponentElo: number,
-  gameResult: GameResultScore,
+  result: GameResultScore,
   nowIso: string = new Date().toISOString(),
-): PlayerRatingState {
+): RatingUpdateOutcome {
   const prevRating = Number.isFinite(playerState.rating) ? playerState.rating : DEFAULT_RATING;
   const prevRd = Number.isFinite(playerState.rd)
     ? Math.max(MIN_RD, Math.min(MAX_RD, playerState.rd))
     : DEFAULT_RD;
-  const prevVol = Number.isFinite(playerState.vol) && playerState.vol > 0 ? playerState.vol : DEFAULT_VOL;
+  const prevVol =
+    Number.isFinite(playerState.vol) && playerState.vol > 0 ? playerState.vol : DEFAULT_VOL;
 
   // Step 2: Convert ratings and RDs onto the Glicko-2 internal scale
   const mu = (prevRating - DEFAULT_RATING) / GLICKO2_SCALE;
@@ -146,7 +152,7 @@ export function updatePlayerRating(
   const v = 1 / (gPhiJ * gPhiJ * E * (1 - E));
 
   // Step 4: Compute estimated improvement delta
-  const scoreDiff = gameResult - E;
+  const scoreDiff = result - E;
   const delta = v * gPhiJ * scoreDiff;
 
   // Step 5: Compute new volatility sigma'
@@ -166,8 +172,7 @@ export function updatePlayerRating(
   const newVol = Number(sigmaPrime.toFixed(6));
 
   const diff = newRating - Math.round(prevRating);
-  const resultLabel: GameOutcomeLabel =
-    gameResult === 1 ? "win" : gameResult === 0 ? "loss" : "draw";
+  const resultLabel: GameOutcomeLabel = result === 1 ? "win" : result === 0 ? "loss" : "draw";
 
   const entry: RatingHistoryEntry = {
     date: nowIso,
@@ -181,20 +186,39 @@ export function updatePlayerRating(
     rating: newRating,
     rd: newRd,
     vol: newVol,
+    delta: diff,
     gamesPlayed: (playerState.gamesPlayed ?? 0) + 1,
     history: [...(playerState.history ?? []), entry],
   };
 }
 
 /**
- * Formats a player's Glicko-2 rating and RD for display (e.g. "1524 ± 65").
+ * Alias for updateRating returning the updated PlayerRatingState.
+ */
+export function updatePlayerRating(
+  playerState: PlayerRatingState,
+  opponentElo: number,
+  gameResult: GameResultScore,
+  nowIso: string = new Date().toISOString(),
+): PlayerRatingState {
+  const { rating, rd, vol, gamesPlayed, history } = updateRating(
+    playerState,
+    opponentElo,
+    gameResult,
+    nowIso,
+  );
+  return { rating, rd, vol, gamesPlayed, history };
+}
+
+/**
+ * Formats a player's Glicko-2 rating and RD for display (e.g. "1540 ± 62").
  */
 export function formatGlickoBadge(state: Pick<PlayerRatingState, "rating" | "rd">): string {
   return `${Math.round(state.rating)} ± ${Math.round(state.rd)}`;
 }
 
 /**
- * Loads the persisted PlayerRatingState from localStorage, falling back to defaults.
+ * Loads the persisted PlayerRatingState from localStorage (`owlchess_glicko2`), falling back to defaults.
  */
 export function loadPlayerRatingState(storage?: Pick<Storage, "getItem">): PlayerRatingState {
   const store =
@@ -202,7 +226,8 @@ export function loadPlayerRatingState(storage?: Pick<Storage, "getItem">): Playe
   if (!store) return createInitialPlayerRatingState();
 
   try {
-    const raw = store.getItem(PLAYER_RATING_STORAGE_KEY);
+    const raw =
+      store.getItem(PLAYER_RATING_STORAGE_KEY) ?? store.getItem(LEGACY_RATING_STORAGE_KEY);
     if (!raw) return createInitialPlayerRatingState();
     const parsed = JSON.parse(raw) as Partial<PlayerRatingState>;
     if (
@@ -226,7 +251,7 @@ export function loadPlayerRatingState(storage?: Pick<Storage, "getItem">): Playe
 }
 
 /**
- * Persists the PlayerRatingState to localStorage under `owlchess_player_rating`.
+ * Persists the PlayerRatingState to localStorage under `owlchess_glicko2` (and `owlchess_player_rating`).
  */
 export function savePlayerRatingState(
   state: PlayerRatingState,
@@ -236,7 +261,9 @@ export function savePlayerRatingState(
     storage ?? (typeof window !== "undefined" ? window.localStorage : undefined);
   if (!store) return;
   try {
-    store.setItem(PLAYER_RATING_STORAGE_KEY, JSON.stringify(state));
+    const serialized = JSON.stringify(state);
+    store.setItem(PLAYER_RATING_STORAGE_KEY, serialized);
+    store.setItem(LEGACY_RATING_STORAGE_KEY, serialized);
   } catch {
     // Ignore storage quota or private-mode errors
   }

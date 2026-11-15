@@ -11,6 +11,7 @@ import {
   resetPlayerRatingState,
   savePlayerRatingState,
   updatePlayerRating,
+  updateRating,
 } from "./glicko2";
 
 describe("Glicko-2 Player Rating Engine (src/lib/glicko2.ts)", () => {
@@ -28,11 +29,12 @@ describe("Glicko-2 Player Rating Engine (src/lib/glicko2.ts)", () => {
 
   it("increases rating and reduces RD on a win against an equal 1500 Elo opponent", () => {
     const initial = createInitialPlayerRatingState();
-    const afterWin = updatePlayerRating(initial, 1500, 1, "2026-11-15T12:00:00.000Z");
+    const afterWin = updateRating(initial, 1500, 1, "2026-11-15T12:00:00.000Z");
 
     // With initial RD=350 vs opponent 1500 (RD=50), a win boosts rating to ~1747 and narrows RD to ~254
     expect(afterWin.rating).toBeGreaterThan(1650);
     expect(afterWin.rating).toBeLessThan(1850);
+    expect(afterWin.delta).toBe(afterWin.rating - DEFAULT_RATING);
     expect(afterWin.rd).toBeLessThan(DEFAULT_RD);
     expect(afterWin.rd).toBeGreaterThan(200);
     expect(afterWin.vol).toBeGreaterThan(0.05);
